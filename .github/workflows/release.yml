@@ -2,11 +2,14 @@ name: Release
 
 # Build the installable Akagi archive and attach it to a GitHub Release.
 #
-# Trigger: pushing a version tag (v0.2.3, v1.0.0, …). That is the single source
-# of truth for a release — the workflow creates the Release for the tag if it
-# does not exist yet, so "push a tag" is the whole ceremony:
+# Trigger: pushing a release tag named `kobalab-v*` (kobalab-v0.2.3, …). The
+# prefix matters: this repository also carries majiang-ai's own release tags
+# (v0.0.1 … v1.3.0, imported by `git fetch upstream --tags`), and a bare `v*`
+# trigger would fire — and publish a bogus Release — for every one of them.
+# The workflow creates the Release for the tag if it does not exist yet, so
+# "push a tag" is the whole ceremony:
 #
-#     git tag v0.2.3 && git push origin v0.2.3
+#     git tag kobalab-v0.2.3 && git push origin kobalab-v0.2.3
 #
 # workflow_dispatch exists so the same build can be re-run by hand (for example
 # to re-attach the archive after editing release notes) without cutting a tag.
@@ -14,7 +17,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'kobalab-v*'
   workflow_dispatch:
 
 permissions:
