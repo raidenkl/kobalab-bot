@@ -172,7 +172,8 @@ $ node bridge/main.js 2 < batches.jsonl
 What the shipped archive unpacks to, i.e. `<akagi>/mjai_bot/kobalab/`:
 
 ```
-kobalab/
+```
+kobalab-bot/                (the git repository root)
 ├── bot.py              Akagi's entry point; runs the Node bridge and wires stdio
 ├── pyproject.toml      REQUIRED by Akagi; empty dependencies, just builds the venv
 ├── manifest.toml       display metadata, supported_modes=["4p"], settings
@@ -186,8 +187,14 @@ kobalab/
 │   ├── from_majiang.js the Player's decision → an mjai action
 │   └── show.js         candidate list → Akagi's `meta.show` HUD card
 ├── test/               per-layer unit suites (node test/test_tiles.js, …)
-└── probe/harness.js    whole games, cross-checked against majiang-core's board
+├── probe/harness.js    whole games, cross-checked against majiang-core's board
+├── pack_kobalab.py     builds the installable `kobalab.zip` (also run by CI)
+└── .github/workflows/release.yml   tag `v*` → build zip → attach to the Release
 ```
+
+The archive Akagi installs contains everything above except the packaging and
+CI plumbing (`pack_kobalab.py`, `.github/`, `.git*`) — `pack_kobalab.py` enforces
+that exclusion itself, so what ships stays exactly the bot.
 
 ## The nine things that make this work
 
@@ -364,12 +371,12 @@ node probe/harness.js --games 6                     # 6 seeded games per seat
 node probe/harness.js --games 2 --rounds east --seed 97
 ```
 
-Both commands are written for the layout you get after unzipping this archive,
-where the harness sits at `probe/` inside the bot folder. In the development
-checkout the same files live one level up (`probe/harness.js` next to
-`kobalab-bot/`), and the harness resolves the bot directory in either place —
-if that resolution were wrong it would silently test a stale copy of the bridge,
-which is the one failure that would make the whole sweep lie.
+Both commands are written for the repository layout, where the harness sits at
+`probe/` and the bot's files are at the root. The layout inside the installed
+archive (`mjai_bot/kobalab/`) has the same shape, and the harness resolves the
+bot directory in either place — if that resolution were wrong it would silently
+test a stale copy of the bridge, which is the one failure that would make the
+whole sweep lie.
 
 The harness plays real games with `Majiang.Game`, injects the bridge as the
 player for one seat, feeds it a **censored** mjai view of every message (opponent

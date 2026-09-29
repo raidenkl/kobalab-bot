@@ -6,7 +6,7 @@
  *
  *  These are hand-written event scripts, so they are fast and precise. The
  *  complementary whole-game test that compares our reconstruction against
- *  mahjong-core's own engine lives in ../probe/harness.js.
+ *  mahjong-core's own engine lives in ../probe/harness.js (repo-root probe/).
  */
 'use strict';
 
