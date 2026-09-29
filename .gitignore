@@ -1,0 +1,15 @@
+# Runtime state — regenerated, never tracked
+node_modules/
+__pycache__/
+*.pyc
+
+# Akagi's per-machine state (created after installation)
+.akagi/
+settings.toml
+
+# Build artifacts (rebuild with ../pack_kobalab.py)
+*.zip
+
+# OS noise
+.DS_Store
+Thumbs.db

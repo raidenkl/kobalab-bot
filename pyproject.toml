@@ -1,0 +1,23 @@
+[project]
+name = "akagi-kobalab-bot"
+version = "0.2.2"
+description = "Runs @kobalab/majiang-ai (電脳麻将's thinking routine) for Akagi over a Node bridge."
+# Deliberately permissive. This entry point is a plain stdlib script (no
+# third-party imports, no version-specific syntax), so the only thing this value
+# can do is make `uv sync` fail on someone whose interpreter is older — Akagi
+# seeds the venv from `UV_PYTHON`, which is its bundled 3.12 in a packaged build
+# and whatever `python3` is on PATH in a from-source build. Keeping the floor low
+# means neither case can trip over it.
+requires-python = ">=3.8"
+license = { text = "MIT" }
+
+# INTENTIONALLY EMPTY. `bot.py` is a thin stdio shim over `bridge/main.js`; it
+# imports only the standard library. The bot's real dependencies are JavaScript
+# and live in `package.json` / `node_modules`, managed by npm rather than uv —
+# they are vendored into the shipped archive so no npm step is needed either.
+dependencies = []
+
+# Without this, `uv sync` tries to build the bot as an installable package and
+# fails. Every Akagi bot needs it (see Akagi's mjai_bot/README.md).
+[tool.uv]
+package = false

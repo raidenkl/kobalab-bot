@@ -1,0 +1,36 @@
+# Akagi bot manifest.
+#
+# See Akagi's mjai_bot/README.md, "User-configurable settings".
+#
+# `supported_modes` is the important line here: @kobalab/majiang-ai is a
+# 4-player rule engine. Its tile-count model is hard-coded to a 70-tile live
+# wall (136 - 13x4 - 14), and the 3-player live wall is 55, so every
+# tile-availability estimate would be wrong. There is also no `kita` (north
+# replacement) rule in the library at all. Declaring 4p-only makes Akagi's UI
+# disable the sanma toggle rather than let a user pick a bot that cannot work.
+
+manifest_version = 1
+
+[bot]
+name             = "kobalab"
+display          = "Kobalab AI (電脳麻将)"
+description      = "@kobalab/majiang-ai, the thinking routine from 電脳麻将, driven over a Node bridge."
+version          = "0.2.2"
+supported_modes  = ["4p"]
+
+# Rule preset. The library's defaults are already Tenhou-shaped (red fives,
+# kuitan on, kuikae off), so the presets only state the axes where the two floors
+# actually differ — and both of them use head-bump, which the library's default
+# of `最大同時和了数 = 2` (double ron) is not.
+[settings.rule_preset]
+type    = "enum"
+label   = "Rule preset"
+default = "tenhou"
+choices = ["tenhou", "majsoul"]
+help    = "Tenhou-style rules unless the table allows kuikae (Majsoul)."
+
+[settings.show_candidates]
+type    = "bool"
+label   = "Show candidate list in HUD"
+default = true
+help    = "Attach the ranked discard/call candidates to each decision."

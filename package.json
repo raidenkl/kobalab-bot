@@ -1,0 +1,17 @@
+{
+  "name": "akagi-kobalab-bot",
+  "version": "0.2.2",
+  "private": true,
+  "description": "Akagi mjai bot that drives @kobalab/majiang-ai (電脳麻将's thinking routine) as an external decision oracle.",
+  "license": "MIT",
+  "main": "bridge/main.js",
+  "scripts": {
+    "start": "node bridge/main.js",
+    "test": "node test/test_tiles.js && node test/test_decisions.js && node test/test_translator.js && node test/test_bridge.js",
+    "harness": "node ../probe/harness.js --games 2 --rounds south"
+  },
+  "dependencies": {
+    "@kobalab/majiang-ai": "^1.2.0",
+    "@kobalab/majiang-core": "^1.3.5"
+  }
+}

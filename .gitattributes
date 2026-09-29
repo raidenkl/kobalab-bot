@@ -1,0 +1,7 @@
+# Keep text files LF everywhere: the packer hashes working-tree bytes, so a
+# CRLF checkout would silently break the byte-reproducible zip build.
+* text=auto eol=lf
+
+# Explicit binaries (none today; listed for safety)
+*.png binary
+*.zip binary
