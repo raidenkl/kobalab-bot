@@ -1,323 +1,85 @@
-# kobalab — Akagi bot running 電脳麻将's AI
+# kobalab-bot — 在 Akagi 上运行电脳麻将 AI 的桥接 Bot
 
-An [Akagi](https://github.com/shinkuan/Akagi) bot that plays using
-[`@kobalab/majiang-ai`](https://github.com/kobalab/majiang-ai) — the thinking
-routine from 電脳麻将 (Satoshi Kobayashi's mahjong app) — unmodified.
+一个 [Akagi](https://github.com/shinkuan/Akagi) 的 mjai Bot，背后驱动的是
+[`@kobalab/majiang-ai`](https://github.com/kobalab/majiang-ai) —— 電脳麻将
+（小林圣的三人/四人麻将练习应用）的思考ルーチン，**原库不做任何修改**。
 
-The two projects do not fit together directly, so this bot is a **bridge**:
+这两个项目没法直接拼在一起，所以本仓库的本质是一个**桥接器（bridge）**：
 
-|  | Akagi | majiang-ai |
+| | Akagi | majiang-ai |
 | --- | --- | --- |
-| form | Tauri/Rust desktop app | Node.js library |
-| bot interface | a **subprocess** that speaks JSON lines on stdin/stdout | an in-process `Majiang.Player` subclass |
-| protocol | **mjai** (`dahai`, `tsumo`, `reach`, …) | **majiang-core** events (`dapai`, `zimo`, `lizhi`, …) |
-| driven by | one request → one action | the engine pushes events; the player answers in a **callback** |
-| entry point Akagi looks for | `bot.py` | JavaScript |
+| 形态 | Tauri/Rust 桌面应用 | Node.js 库 |
+| Bot 接口 | 一个**子进程**，在 stdin/stdout 上说 JSON 行 | 进程内的 `Majiang.Player` 子类，靠**回调**应答 |
+| 协议 | **mjai**（`dahai`、`tsumo`、`reach`…） | **majiang-core** 消息（`dapai`、`zimo`、`lizhi`…） |
+| 驱动方式 | 一批请求 → 一个动作 | 引擎推送事件，玩家在回调里作答 |
+| Akagi 寻找的入口 | `bot.py` | JavaScript |
 
 ```
-Akagi (Rust)                                   mjai_bot/kobalab/
-   │  spawns  venv-python bot.py <seat>          ┌────────────────────────┐
-   ├────────────────────────────────────────────►│ bot.py   (thin shim)   │
-   │   stdin : one JSON array per line           │  subprocess.Popen      │
-   │   stdout: exactly one JSON action per line  │   ↓ stdin    ↑ stdout   │
-   │   stderr: logs + @@AKAGI_NOTIFY@@ toasts    └───┬────────────────────┘
-   │                                                 │ node bridge/main.js
-   └─────────────────────────────────────────────────┤  mjai ⇄ majiang
-                                                     └─ require('@kobalab/majiang-ai')
+Akagi (Rust)                                    mjai_bot/kobalab/
+   │  启动 venv-python bot.py <seat>             ┌────────────────────────┐
+   ├────────────────────────────────────────────►│ bot.py   （薄垫片）      │
+   │   stdin : 每行一个 JSON 数组（事件批次）      │  subprocess.Popen       │
+   │   stdout: 每行恰好一个 JSON 动作              │   ↓ stdin    ↑ stdout   │
+   │   stderr: 日志 + @@AKAGI_NOTIFY@@ 通知        └───┬────────────────────┘
+   │                                                  │ node bridge/main.js
+   └──────────────────────────────────────────────────┤  mjai ⇄ majiang 双向翻译
+                                                      └─ require('@kobalab/majiang-ai')
 ```
 
-## Install
+---
 
-There are two ways in, and they end at the same place:
+## 一、实现原理
 
-- **Akagi's installer** — *Bots* tab → install from a local `.zip` → pick
-  `kobalab.zip`. Nothing needs renaming: the archive's single top-level folder is
-  `kobalab`, and the installer names the bot after the zip stem, so the folder
-  comes out right (see step 2 for why that matters). Install a copy under that
-  name only — the same archive saved as `kobalab-bot.zip` would install to
-  `mjai_bot/kobalab-bot/`, and Akagi would key the settings and the UI row off
-  that instead.
-- **By hand** — unzip it so that `<akagi>/mjai_bot/kobalab/bot.py` exists. A
-  nested `kobalab/kobalab/` is the usual mistake.
-
-Then:
-
-1. **Node.js ≥ 18 must be on `PATH`.** The bridge checks at start-up and reports a
-   toast if it is missing, rather than letting Akagi time out on every turn.
-   `KOBALAB_NODE` overrides the lookup if you keep Node somewhere unusual.
-2. The bot's folder must be named **`kobalab`** — so you end up with
-   `<akagi>/mjai_bot/kobalab/bot.py`.
-
-   The name is not cosmetic. Akagi identifies a bot by the name of the directory
-   containing `bot.py`: the Bots list, `settings.toml`, and the UI row are all
-   keyed by it. A mismatch shows up as *"my setting will not save"* — the panel
-   writes under one name and reads under another. `doctor.js` checks for exactly
-   this, and the shipped archive unpacks to a `kobalab/` folder so the correct
-   name comes for free.
-
-   Where that folder goes: Akagi resolves `bot.dir` (default `mjai_bot`)
-   relative to its executable's directory first, then the working directory —
-   see `util::resolve_dir` in Akagi's `src/util/mod.rs`. The Bots page prints the
-   resolved path under each bot, so that is the quickest way to confirm.
-
-   ```
-   akagi-3.7.1-windows-x64/
-   └── mjai_bot/
-       └── kobalab/          <- the folder name must be `kobalab`
-           ├── bot.py
-           ├── manifest.toml
-           └── ...
-   ```
-3. In Akagi's **Bots** tab, click **Install environment** on the `kobalab` row.
-
-   Akagi requires a `pyproject.toml` on every subprocess bot
-   (`src/bot/manager.rs`: *"bot … has no pyproject.toml — required for uv sync"*),
-   so this one ships a minimal, dependency-free one and the button runs a `uv
-   sync` that creates the bot's virtualenv. The bot itself imports only the
-   standard library, so the sync installs nothing and is quick; `bot.py` then
-   runs under the venv's interpreter.
-
-4. Activate it in Akagi's **Bots** tab — the **4p** toggle on that row.
-
-   The toggle stays disabled until step 3 has run once (Akagi refuses to
-   activate a bot whose environment is not installed, so the first game cannot
-   stall on a sync).
-
-### If a setting will not save
-
-Run the bundled check from inside the installed folder:
-
-```sh
-cd <akagi>/mjai_bot/kobalab
-node doctor.js
-```
-
-It walks the whole chain — `manifest.toml` → `settings.toml` →
-`.akagi/resolved_settings.json` → `AKAGI_BOT_CONFIG` — and prints what each file
-literally says, so the first disagreement is visible instead of inferred. The
-most common finding is the folder-name mismatch described above.
-
-Settings are applied when Akagi **spawns** the bot, i.e. at the start of a game.
-A change made mid-game takes effect on the *next* game, not the current one.
-
-### About the JavaScript dependencies
-
-`package.json` declares `@kobalab/majiang-ai` and `@kobalab/majiang-core`, and
-the shipped archive already includes them under `node_modules` — there is no
-`npm install` step. If you installed from source instead, run it once:
-
-```sh
-cd mjai_bot/kobalab && npm install --omit=dev
-```
-
-`uv` and npm manage different halves of this bot and neither replaces the other:
-uv builds the Python venv that runs `bot.py`, npm supplies the Node libraries
-that `bridge/` requires. A `pyproject.toml` with an empty `dependencies` list is
-what Akagi demands; it is not where the Node side is declared.
-
-## Windows notes
-
-Akagi does **not** bundle Node, so it must be installed on the machine. The shim
-searches for it in this order and reports every path it tried when it fails:
-
-1. `KOBALAB_NODE`, if set
-2. `node` / `node.exe` / `nodejs` on `PATH`
-3. the usual install locations — `C:\Program Files\nodejs\node.exe`,
-   `%APPDATA%\nvm\node.exe` (nvm-windows),
-   `%LOCALAPPDATA%\Microsoft\WindowsApps\node.exe`,
-   `%LOCALAPPDATA%\Programs\nodejs\node.exe`,
-   `C:\ProgramData\chocolatey\bin\node.exe`, and the Scoop shim
-
-Each candidate is *run* with `--version` before it is accepted, which matters for
-one Windows-specific trap: installing Node from the Microsoft Store creates an
-**App Execution Alias** at `%LOCALAPPDATA%\Microsoft\WindowsApps\node.exe`. That
-file looks present but does not behave like a normal executable, so a plain
-existence check would accept it and then fail confusingly on the first spawn.
-The version probe rejects it and the search moves on.
-
-If Node is already installed and the bot still reports it missing, the usual
-cause is that Akagi was started in a way that did not inherit your user `PATH` —
-installing Node while Akagi is running is the common case, and a GUI app keeps
-the environment it was launched with. Either restart Akagi, or set `KOBALAB_NODE`
-to the full path and be done with it:
+### 1.1 核心机制：三层桥接
 
 ```
-setx KOBALAB_NODE "C:\Program Files\nodejs\node.exe"
+Akagi                    bot.py (Python 垫片)            bridge/ (Node)                 majiang-ai
+  │  JSON 行批次  ──────────►  逐行透传  ──────────►  main.js JSONL 主循环              │
+  │                            │                       ├─ tiles.js      牌记法互译        │
+  │                            │                       ├─ to_majiang.js mjai→majiang 模型 │──► Majiang.Player
+  │                            │                       ├─ from_majiang.js 决策→mjai 动作  │◄── 回调决策
+  │                            │                       └─ show.js      候选→HUD 卡片      │
+  │  ◄──────────  每批恰好一个动作  ◄────────────────────┘                                 │
+  └─ 注意：majiang-ai 全程原样使用，本仓库不修改上游库的任何一行
 ```
 
-(`setx` affects processes started afterwards; restart Akagi for it to take.) If
-you would rather not install Node system-wide, it is enough to unzip a Node
-portable build anywhere and point `KOBALAB_NODE` at its `node.exe`.
+一次决策的完整链路：
 
-## Running it without Akagi
+1. **入口**：Akagi 按 `manifest.toml` 启动 `python bot.py <座位号>`，`bot.py` 只做三件事——找到 Node（见 [2.6](#26-在-akagi-里安装并激活)）、拉起 `node bridge/main.js <座位号>` 子进程、双向泵送 stdin/stdout（每行即时 flush）。所有诊断走 stderr，stdout 上只有协议 JSON。
+2. **翻译进来**：`to_majiang.js` 把每条 mjai 事件翻译成 majiang-core 消息，喂给一个内部维护的 `Player` 模型。模型里**四家**的手牌都在——我方是真实手牌，其他三家是"占位手牌"，对手的手牌与摸牌按库自己的约定屏蔽为 `'?'`/`'_'`。
+3. **决策**：majiang-ai 在模型上跑 `select_dapai` / `select_fulou` / `select_lizhi` 等评估，通过回调返回选择。
+4. **翻译出去**：`from_majiang.js` 把决策转成 mjai 动作，先过**合法性闸门**（见 1.2 第 6 条），再由 `show.js` 生成 Akagi HUD 卡片塞进 `meta.show`。
+5. **输出**：`main.js` 保证**每批恰好回一个动作**——没有决策就回 `{"type":"none"}`；桥内任何异常都被捕获成 `none` + 一条 stderr 日志，绝不死进程（Akagi 会杀掉不应答的 bot）。
 
-The bridge is an ordinary program, so it can be driven by hand:
+### 1.2 十个关键设计（每一条都对应一个真实踩过的坑）
 
-```sh
-cd kobalab-bot
-echo '[{"type":"start_game","names":["a","b","c","d"],"id":0,"num_players":4}]' | node bridge/main.js 0
-```
+以下全部是与上游库对照实验得出的结论，并在代码中用到它的位置有注释。它们看起来不该这么长——因为做错任何一条的失败模式都是**静默**的：决策丢失、HUD 数字错、或模型悄悄和牌桌不同步。
 
-One JSON batch per line in, exactly one JSON action per line out:
+1. **座位坐标系。** majiang-core 用同一套下标表达两种含义（`Player` 的 getter 按门风 `_menfeng` 索引模型，`Board` 按事件的 `l` 读写），而 mjai 给的是绝对座位。桥接器把 `kaiju.qijia` 设为本局基础庄家、把我方手牌存在**门风**下标上，用 `(actor - qijia - jushu) % 4` 平移每个事件的 actor。特别注意：**`jushu` 是"本轮内第几局"（0–3），整场的局数由 `zhuangfeng` 承载**——把全场手数喂进去，南二局起 `(id+8-qijia-jushu)%4` 变负，`SuanPai.qipai` 索引到 `undefined` 抛错，之后 bot 全程只会答 `none`。
 
-```
-$ node bridge/main.js 2 < batches.jsonl
-{"type":"none"}
-{"type":"dahai","actor":2,"pai":"1m","tsumogiri":false,
- "meta":{"show":{"title":"打牌候选（选 1m）","items":[…]}}}
-```
+2. **牌墙计数双口径。** `SuanPai._n_zimo` 是所有"牌还剩几张"估计的**全局缩放因子**，而 AI 的合法性检查读的是 `Board.shan.paishu`。桥接器精确追踪牌墙并在**每次决策时同时重申两者**。口径与库一致：每次摸牌扣 1（对手被屏蔽的摸牌也算，AI 对它们只减计数器，恰好正确）；杠扣 1，且**在岭上摸牌那一步扣**（`Majiang.Shan` 的 `gangzimo` 平移的就是 `zimo` 弹出的同一个数组）；杠的新宝牌指示牌**不单独扣**——若在宣告时扣，杠与岭上摸之间两个计数会差 1，而决策可能正落在这个区间里。
 
-## Layout
+3. **自家弃牌即时应用。** 引擎不一定可靠地把"你自己的弃牌"告诉你，所以桥接器在 AI 返回选择的**那一刻**就把它应用进模型，而不是等一个可能永远不来的回声。且必须走 `Player.dapai` 而不是直接改模型——正是这次调用维护着 AI 要读回的状态：立直标记（连带 1000 点与立直棒）、`_diyizimo`（卡住会让"九种九牌"中途再次出现）、`_neng_rong`（**临时振听唯一会被清除的地方**，跳过它会让一次漏荣和变成整局永久振听）。
 
-What the shipped archive unpacks to, i.e. `<akagi>/mjai_bot/kobalab/`:
+4. **永不应答自己的弃牌。** Akagi 会把我方弃牌回显给所有四家；再喂给 AI 会把弃牌应用第二遍——牌已经不在手里，`Shoupai.dapai` 抛错，后续事件全部被拒，bot 只能答 `none`（这就是当年"鸣牌之后 bot 卡住"的真身）。回声现在被吸收而不是再应用；自家的吃碰回来时同理。
 
-```
-```
-kobalab-bot/                (the git repository root)
-├── bot.py              Akagi's entry point; runs the Node bridge and wires stdio
-├── pyproject.toml      REQUIRED by Akagi; empty dependencies, just builds the venv
-├── manifest.toml       display metadata, supported_modes=["4p"], settings
-├── package.json        @kobalab/majiang-ai + majiang-core (pinned by lockfile)
-├── node_modules/       the two libraries, vendored — no npm step at install time
-├── doctor.js           settings-chain check; `node doctor.js` in the bot folder
-├── bridge/
-│   ├── main.js         the JSONL loop; one reply per batch, always
-│   ├── tiles.js        mjai ⇄ majiang tile and hand notation
-│   ├── to_majiang.js   mjai event stream → drives a majiang-core Player
-│   ├── from_majiang.js the Player's decision → an mjai action
-│   └── show.js         candidate list → Akagi's `meta.show` HUD card
-├── test/               per-layer unit suites (node test/test_tiles.js, …)
-├── probe/harness.js    whole games, cross-checked against majiang-core's board
-├── pack_kobalab.py     builds the installable `kobalab.zip` (also run by CI)
-└── .github/workflows/release.yml   tag `v*` → build zip → attach to the Release
-```
+5. **不鸣也是一次决策。** majiang-ai 非常保守，**大多数鸣牌窗口以不鸣告终**，而它不记录自己否决的鸣牌——被拒绝的鸣牌一度毫无输出。现在驱动器用 AI 自己的评估器（仅用一次性克隆）重新推导对比，HUD 给出"鸣牌判断"卡解释沉默（见 1.3）。
 
-The archive Akagi installs contains everything above except the packaging and
-CI plumbing (`pack_kobalab.py`, `.github/`, `.git*`) — `pack_kobalab.py` enforces
-that exclusion itself, so what ships stays exactly the bot.
+6. **每个应答都过合法性闸门。** 动作只有在模型允许时才发出，否则一律 `{"type":"none"}`。mjai 流本身不带合法动作集，桥接器用与 AI **同一套库谓词**（`MajiangDriver.lastLegal`）从自己的模型推导出一个**类型级**合法集：手中途荒牌、牌墙不允许的立直、没有面子的吃碰、振听状态下的荣和……类型不对就不发。具体选哪张牌是 AI 的事（它就是从这些列表里挑的）；沉默可以恢复，把牌局状态搞乱不能。
 
-## The nine things that make this work
+7. **立直是一个动作。** mjai 把立直拼成"宣告 + 宣告所打的牌"两个动作，但 Akagi 每批只读一个动作、把宣告牌记在 `Reach.pai` 上（官方文档承认的非规范扩展），自动出牌会卡死在不带弃牌的 `reach` 上。塞进 `meta` 的内容会被无视——Akagi 的 `meta` 是自由格式 HUD 数据，后端从不解释它。
 
-Everything below was established by experiment against the installed libraries
-and is documented at the point in the code where it is relied on. The list is
-longer than it looks like it should be because the failure mode of getting one of
-them wrong is a *silent* one: a dropped decision, a wrong number on the overlay,
-or a model that quietly stops matching the table.
+8. **被屏蔽的摸牌也必须喂进模型。** 模型持有全部四家的手牌。被屏蔽的三家用 `Board.qipai` 填了 13 张**空白**，而该座位**每一条**事件都在消耗它：`Shoupai.decrease` 对"手里没有的牌"吃一张空白——出牌扣 1、吃碰各扣 2、暗杠扣 4，只有摸牌补回一张。所以对手的 `tsumo`（牌是 `"?"`，看似"没有东西可应用"）恰恰是**维持占位手牌不空**的唯一事件。跳过它：该座位第 13 次出牌时占位见底、`decrease` 抛错；又因为 `Board.dapai` **先扣空白、再记河牌**，抛错会把这条河牌一起带走，之后对这张牌的吃碰也跟着失败。桥接器因此对**四家**的摸牌都走 `Player.zimo`，对手用 `'_'`（库自己的"看不见的牌"记号）。
 
-**1. Seat coordinates.** majiang-core uses one index space for two meanings
-(`Player`'s getters index the model by `_menfeng`, while `Board` reads and writes
-it by the event's `l`), and mjai gives absolute seats. The bridge sets
-`kaiju.qijia` to the game's base dealer and stores the bot's hand at its
-**menfeng** index, translating each event's actor with
-`(actor - qijia - jushu) % 4`. The obvious alternative — rotating the bot to
-index 0 — puts the hand where `Board.zimo` never writes, and the AI then passes
-every turn.
+9. **面子串里红五/被叫牌是位置性的。** `He.fulou` 从面子串恢复"被叫的那张牌"的方式是"**标记紧跟的那一位**"，再与打牌者的河牌比对——对它来说 `p5` 与 `p0` 是两张不同的牌。所以副露必须写成 **手里的张在前、被叫那张最后、标记落在它身上**（库自己的写法：手里有红五时碰普通五写 `s50` + `5` + `=`，碰红五写 `s55` + `0` + `=`）。任何其他拼法都会把标记落在"错的那个五"上，碰被静默丢弃。
 
-`jushu` is the hand counter **within the round**, 0..3, with the round itself
-carried by `zhuangfeng`. That distinction is load-bearing rather than cosmetic:
-`Board.menfeng` and `majiang-ai`'s `SuanPai.qipai` both rotate seats with
-`(id + 8 - qijia - jushu) % 4`, which only stays non-negative for 0..3. Feeding
-them a game-wide index (up to 7 in a hanchan) makes that expression negative from
-South 2 on; JavaScript's `%` keeps the sign, `SuanPai.qipai` indexes
-`qipai.shoupai[-1]`, throws on the undefined hand and rejects every later event —
-the bot plays the rest of the game answering `none`. The seat rotation is
-unaffected either way, `(jushu + 4) ≡ jushu (mod 4)`.
+10. **玩家可以覆盖 bot 的选择。** 手动游玩时 bot 的回答只是**建议**：真正离开手牌的是玩家打的那张，它以回声的形式回来，可能和桥接器已经应用的选择**不同**。这个差异是信息不是噪声——吞掉它（曾经的实现）会在模型里留一张幻影牌，此后每一轮候选都建立在你没有的手牌上，直到 AI 恰好打掉幻影才"自愈"（这就是"候选牌与实际手牌不一致"的根源）。现在回声会被**对账**：bot 选的牌放回模型手牌，玩家实际打的那张走正常弃牌路径取出（河牌、振听记账随真实弃牌走），那次没发生的弃牌再从河牌、危险表和立直标记里撤销。
 
-**2. The live-wall count.** `SuanPai`'s `_n_zimo` is a *global scale factor* on
-every tile-availability estimate, and `Board.shan.paishu` is what the AI's own
-legality checks read instead, so the bridge tracks the wall precisely and
-re-asserts **both** at every decision. The model is the library's own: every draw
-counts once, opponent draws included even though their tile is censored to `"?"`
-(the AI only decrements a counter for them, which is exactly right), and a kan
-costs one tile — charged at its replacement draw, which is where `Majiang.Shan`
-charges it (its `gangzimo` shifts the same array `zimo` pops from). Its extra dora
-indicator is *not* charged separately: charging it at the announcement instead
-leaves the two counters one apart for the whole interval between a kan and its
-draw, and a decision can fall inside that interval — which is exactly what a
-per-message comparison against the engine showed.
+### 1.3 HUD 覆盖层
 
-**3. Our own discard.** A player is not reliably told about its own discard, so
-the bridge applies the choice the AI returns as soon as it returns it, rather
-than waiting for an echo that may never come. It applies it through
-`Player.dapai`, not by poking the model, because that call is what maintains the
-state the AI then reads back: the riichi flag (and so the 1000 points and the
-pot), `_diyizimo` (a stuck flag lets a nine-terminals abort appear mid-hand) and
-`_neng_rong` — the only place temporary furiten is ever cleared, so skipping it
-made a single missed ron permanent for the rest of the hand.
+只有发生真实决策时才出卡片，分两种：
 
-**4. A seat is never asked about its own discard.** Akagi echoes our own
-discard back to us (`Majiang.Game` notifies all four seats), and feeding it to
-the AI applied the discard to the model a second time — the tile was already
-gone, so `Shoupai.dapai` threw, every later event was rejected, and the bot could
-only answer `none`. That is what "the bot hangs after a call" actually was. The
-echo is now absorbed rather than re-applied, and a seat's own chi/pon is
-recognised when it comes back for the same reason.
-
-**5. A declined call is still a decision.** The AI is conservative — most call
-windows end in a pass — and it does not keep the calls it rejects, so a declined
-call used to produce no output at all. The driver re-derives the comparison from
-the AI's own evaluator (throwaway clones only) and the overlay explains it. See
-*What the overlay shows*.
-
-**6. Every reply is gated.** An action is only emitted if the model permits it;
-anything else becomes `{"type":"none"}`. Akagi's own bundled bot uses the same
-"legal-action gate" idea, but the mjai stream carries no legal set, so the bridge
-derives one from its own model with the same library predicates the AI decided
-with (`MajiangDriver.lastLegal`) and hands it to the translator. It is a
-type-level gate — it catches "nothing of this kind is legal now": an abortive
-draw mid-hand, a riichi the wall forbids, a call with no mianzi, a ron while
-furiten — while which tile or mianzi to use stays the AI's business, since it
-picks from those same lists. Staying silent is recoverable; desynchronising the
-game is not. Exceptions are contained the same way: any failure inside the bridge
-produces `none` for that batch and a line on stderr, never a dead process — Akagi
-kills a bot that stops answering.
-
-**7. A riichi is one action.** mjai spells a riichi as a declaration plus the
-discard it is declared on, but Akagi reads exactly one action per batch and keeps
-the declaring tile on `Reach.pai` — a documented non-spec extension — and its
-autoplay stalls on a `reach` that does not name the discard. Anything smuggled
-into `meta` is ignored: Akagi's `meta` is free-form HUD data and the backend never
-interprets it, so a trailing `dahai` in there is simply lost.
-
-**8. A censored draw still has to reach the model.** The model holds a hand for
-all four seats. For the three the wire censors, `Board.qipai` fills that hand with
-thirteen blanks, and *every* event from that seat spends from it: `Shoupai.decrease`
-charges a tile it does not hold to the blanks, so a discard costs one blank, a chi
-two, a pon two and a closed kan four. Only a draw puts one back. So an opponent's
-`tsumo` — whose tile is `"?"`, and which therefore looks like an event with
-nothing to apply — is in fact the *only* thing keeping that placeholder alive.
-Skip it and the placeholder empties after that seat's thirteenth discard, at which
-point `decrease` throws; and because `Board.dapai` spends the blank *before* it
-records the tile in the discarder's river, the throw takes the river entry with
-it, so the next call on that tile fails too. The bridge therefore feeds every draw
-through `Player.zimo` with `'_'` — the library's own word for a tile it cannot see
-— for all four seats.
-
-**9. A red five in a meld is positional.** `He.fulou` recovers the called tile
-from a meld string as "the digit the marker follows" and compares it against the
-discarder's river, and `p5` and `p0` are different tiles to it. So a set has to be
-spelled `<copies from hand><called tile><marker>`, with the called copy last and
-the marker on it — the library's own form (`Shoupai.get_peng_mianzi` writes
-`s50` + `5` + `=` when an ordinary five is called by a hand holding the red one,
-and `s55` + `0` + `=` when the red five is). Building the digits in any other
-order puts the marker on the wrong copy of the five, and the pon silently fails.
-
-**10. The player can override the bot.** Manual play makes the bot's answer a
-suggestion: the tile that actually leaves the hand is whatever the player threw,
-and it comes back as an echo that may name a *different* tile from the one the
-bridge already applied. That difference is information, not noise — swallowing
-it (which this used to do) left a phantom tile in the model, and every later
-candidate list was then computed for a hand the player does not have, until the
-AI happened to discard the phantom and healed the model by luck. The echo is now
-reconciled: the bot's tile goes back into the model hand, the player's tile
-comes out through the ordinary discard path, and the discard that never happened
-is un-recorded from the river, the danger table and the riichi flags.
-
-## What the overlay shows
-
-Two different cards, depending on whether the AI took the call:
-
-**It called** — the ranked calls, with the chosen one first:
+**AI 鸣了** —— 按评分排序的鸣牌候选，选中的在最上：
 
 ```
 鸣牌候选（选 2m）
@@ -325,123 +87,240 @@ Two different cards, depending on whether the AI took the call:
   不鸣 (Pass) 826   向听 1
 ```
 
-**It passed** — a call judgement, because a silence here is misleading:
+**AI 没鸣** —— 给出"鸣牌判断"卡，因为沉默本身有误导性：
 
 ```
 鸣牌判断（不鸣，对方打 3s）
   不鸣 (Pass)  2066   向听 1
-  碰 3s           0   听牌 · 听牌前进 1 · 差 -2066     ← red
+  碰 3s           0   听牌 · 听牌前进 1 · 差 -2066     ← 红色
 ```
 
-The heading reads **对方打** (they discarded), not `打`. The distinction is worth
-keeping: the tile named on a call window is the OPPONENT's discard — the one we
-were offered — while a discard card's heading names the tile the bot is about to
-throw. Both used to read `打 X`, so a declined pon on a tile the hand did not even
-hold looked exactly like advice to discard it.
+标题写的是**对方打**，不是"打"——鸣牌窗口里提到的牌是**对家的弃牌**（你被鸣的那张），而弃牌卡的标题才是自己将打出的牌。两者曾共用"打 X"，结果"手里根本没有 3s 的碰被拒"看起来就像"建议你打 3s"。每行的数字用 AI 自己的 `eval_shoupai` 与 `get_paishu()` 计算，与决策同一货币；某个被拒的鸣牌若其实更优，会标绿色而不是红色，让罕见的错过可见。
 
-That second card exists because `@kobalab/majiang-ai` is deliberately
-conservative and **most call windows end in a pass**: `select_fulou` accepts a
-call only when its own evaluation strictly beats not calling, and it does not
-record the calls it rejects. Without the card, a declined call produced no output
-at all, which reads as "the bot never considered it" when in fact it weighed the
-option and declined. Every row is computed with the AI's own `eval_shoupai` and
-`get_paishu()`, so the numbers are the same currency as the decision itself; a
-call that would actually have been better is coloured green rather than red, so
-the rare miss is visible instead of hidden.
+普通的摸切回合、以及完全无鸣牌可能的对手弃牌，都不会出卡片。
 
-Cards only appear when there was a real decision. An opponent's discard you
-cannot call — no matching tiles at all — stays silent, and so does a turn where
-you are merely drawing and discarding.
+### 1.4 验证体系
 
-## Verification
-
-Two layers, both runnable offline:
+两层，全部可离线运行：
 
 ```sh
-# per-layer unit suites
-node test/test_tiles.js        # notation, red fives, meld spelling, serialization
-node test/test_decisions.js    # decision → mjai action, incl. Akagi's schema
-node test/test_translator.js   # event stream → majiang, wall accounting, kans
-node test/test_bridge.js       # batches in, one action out
-npm test                       # all four
+# 第一层：逐层单测（纯 Node，无测试框架依赖）
+node test/test_tiles.js        # 记法、红五、面子拼写、序列化
+node test/test_decisions.js    # 决策 → mjai 动作，含 Akagi 的 schema
+node test/test_translator.js   # 事件流 → majiang、牌墙记账、杠
+node test/test_bridge.js       # 批次进、单动作出
+npm test                       # 四套全跑
 
-# whole games, compared against the engine
+# 第二层：整局对账（与引擎牌面逐消息比对）
 npm run harness                # = node probe/harness.js --games 2 --rounds south
-node probe/harness.js --games 6                     # 6 seeded games per seat
+node probe/harness.js --games 6                     # 每座位 6 局种子对局
 node probe/harness.js --games 2 --rounds east --seed 97
+node probe/harness.js --games 12 --override         # 模拟玩家手动覆盖出牌
 ```
 
-Both commands are written for the repository layout, where the harness sits at
-`probe/` and the bot's files are at the root. The layout inside the installed
-archive (`mjai_bot/kobalab/`) has the same shape, and the harness resolves the
-bot directory in either place — if that resolution were wrong it would silently
-test a stale copy of the bridge, which is the one failure that would make the
-whole sweep lie.
+harness 用 `Majiang.Game` 打真实对局，把桥接器注入为其中一个座位的玩家，喂给它**被屏蔽的** mjai 视图（对手手牌与摸牌换成 `"?"`），每条消息之后把桥接器的模型与**引擎自己的棋盘**比对——暗牌、副露、活牌墙数。当前量级：单测 **487 断言**；卡片一致性探针 16 局 / 8913 次决策 / 2676 张卡片，候选与手牌不一致 **0**、事件被拒 **0**；整局扫查 **116 局 / 1298 手 / 122,127 条消息零偏差**（东南战 + 东风战），另有带手动覆盖的 12 局 / 107 手 / 10,700 条消息零偏差。
 
-The harness plays real games with `Majiang.Game`, injects the bridge as the
-player for one seat, feeds it a **censored** mjai view of every message (opponent
-hands and draws replaced by `"?"`), and after every message compares the bridge's
-model against the **engine's own board** — the concealed tiles, the melds, and the
-live-wall count. A mismatch is reported with the exact event that caused it:
+让这个比对值得相信的两点（都是吃过亏学来的）：参照物必须来自**引擎**（桥接器和自己比是空洞的真）；比对必须知道两者在哪一步"合理地差一拍"（引擎先落盘再通知，我方的回应要等返回后才落盘）。
+
+### 1.5 已知限制
+
+- **仅四人麻将。** `manifest.toml` 声明 `supported_modes = ["4p"]`，Akagi 的三麻开关会被禁用；`bot.py`/桥接器对三人局直接拒绝。原因很具体：`SuanPai` 把活牌墙硬编码为 70 张（三麻是 55），且库没有拔北规则。
+- **线上没有 `qijia`。** Akagi 的 `start_game` 不带本局基础庄家，桥接器假定"bot 自己的座位就是基础庄家"。这个视图内部自洽，对 AI 的比较运算已经够用。
+- **合法性闸门是类型级的。** 它拦得住"当前根本不存在这类动作"，拦不住"类型允许但该实例不合法"（比如吃错了具体哪张）。要看住实例级别需要真正消费 Akagi 自己的合法集。
+- **规则预设只有两个。** `tenhou` 与 `majsoul` 只差"是否允许食替"，其余都用库的天凤形默认（红五、食タン、头跳）。其他规则需要改 `bridge/main.js`。
+
+### 1.6 许可
+
+`@kobalab/majiang-ai` 与 `@kobalab/majiang-core` 为 MIT，本桥接器同为 MIT。bot 以独立 OS 进程、经管道交换 JSON 的方式运行——与 Akagi 依赖 AGPL bot 的边界一致，没有任何代码链接进 Akagi。
+
+---
+
+## 二、使用指南（从克隆到运行）
+
+### 2.1 环境准备
+
+| 软件 | 版本要求 | 用途 |
+| --- | --- | --- |
+| Node.js | **≥ 18**（运行必需） | `bot.py` 靠它启动桥接器；打包机器不需要 |
+| npm | 随 Node 附带 | 安装 JS 依赖 |
+| Git | 任意较新版本 | 克隆仓库 |
+| Python | ≥ 3.10（**仅打包/开发需要**） | 运行 `pack_kobalab.py`、跑安装布局验证 |
+| uv | 任意（仅 Akagi 目标机需要） | Akagi 点 "Install environment" 时自动使用，无需手动安装 |
+
+克隆仓库：
+
+```sh
+git clone https://github.com/raidenkl/kobalab-bot.git
+cd kobalab-bot
+```
+
+### 2.2 安装依赖
+
+```sh
+npm install --omit=dev        # 或 npm ci（严格按 package-lock.json 锁定版本）
+```
+
+- `package.json` 只声明两个运行时依赖：`@kobalab/majiang-ai` 与 `@kobalab/majiang-core`。
+- **uv 与 npm 各管一半，互不替代**：uv 构建 `bot.py` 运行的 Python venv（依赖为空，只建环境）；npm 提供 `bridge/` require 的 Node 库。`pyproject.toml` 的 `dependencies` 留空是 Akagi 的硬性要求，不是 Node 依赖的声明处。
+- 注意：若你拿到的是**发布 zip**，`node_modules` 已内置，装进 Akagi 后不需要任何 npm 步骤；只有从源码克隆运行才需要本步骤。
+
+### 2.3 克隆后先跑一遍验证
+
+```sh
+npm test            # 四套单测，应全绿
+npm run harness     # 两局种子对局，应输出 "bridge model matched the engine after every message."
+```
+
+harness 位于 `probe/`，bot 文件在仓库根，它能自动解析这两种布局（仓库布局与安装后布局同构）。若改动代码，发布前请用较大的 `--games` 值跑扫查——单点失败是大海捞针，扫查才是门槛。
+
+### 2.4 配置说明
+
+Bot 的设置项声明在 `manifest.toml`，在 Akagi 的 Bots 面板里修改：
+
+| 设置项 | 取值 | 说明 |
+| --- | --- | --- |
+| `rule_preset` | `tenhou`（默认）/ `majsoul` | 规则预设，两者仅"是否允许食替"不同 |
+| `show_candidates` | 布尔 | 是否在 HUD 显示候选列表卡片 |
+
+两个要点：
+
+- **设置在 Akagi 启动 bot 时（即开局时）生效**。对局中途的修改从**下一局**开始起作用。
+- 如果设置保存不上，十有八九是 bot 目录名不对（见 2.6）。用自带的诊断工具看整条设置链路每一环到底写了什么：
+
+  ```sh
+  cd <akagi>/mjai_bot/kobalab
+  node doctor.js
+  ```
+
+  它逐个打印 `manifest.toml` → `settings.toml` → `.akagi/resolved_settings.json` → `AKAGI_BOT_CONFIG` 的字面内容，第一处不一致会直接可见。
+
+### 2.5 不装 Akagi 也能跑
+
+桥接器就是个普通程序，可以手动喂数据：
+
+```sh
+# 最小启动测试：stdin 给一行 start_game，应立即回一行动作（通常是 {"type":"none"}）
+echo '[{"type":"start_game","names":["a","b","c","d"],"id":0,"num_players":4}]' | node bridge/main.js 0
+
+# 喂一份真实的 JSONL 牌谱批次
+node bridge/main.js 2 < batches.jsonl
+```
+
+输出示例（每批恰好一行动作，HUD 卡片在 `meta.show`）：
 
 ```
-$ node harness.js --games 4
-  seat 0 game 0: seed    11   9 hands   811 messages  ok
-  ...
-24 game(s), 225 hands, 21971 engine messages replayed.
-RESULT: bridge model matched the engine after every message.
+{"type":"dahai","actor":2,"pai":"1m","tsumogiri":false,
+ "meta":{"show":{"title":"打牌候选（选 1m）","items":[…]}}}
 ```
 
-Two things about that comparison are what make it worth trusting, and both were
-learned the hard way: the reference has to come from the ENGINE (comparing the
-bridge against itself is vacuously true and hides exactly these bugs), and the
-comparison has to know where the two are legitimately one step apart (the engine
-applies a message to its board before notifying, and applies our reply only after
-we return it).
+### 2.6 在 Akagi 里安装并激活
 
-Because a failure at one seat in one hand is a needle, the sweep is what matters:
-run it with a large `--games` before trusting a change. Every wall-accounting rule
-in `to_majiang.js` exists because that sweep found the counter drifting — a kan's
-replacement draw, a kan's dora indicator, another seat's rinshan flag, a kan whose
-replacement draw never arrived, and finally the *order* of the dora and the draw
-were each a separate bug, and each now has a named regression test in
-`test/test_translator.js` (section 8b).
+两种进入方式，终点相同：
 
-`--rounds` picks the game length (`1`, `east`, `south`, `full`); multi-hand games
-are the default because the seat rotation only moves with the hand counter, and
-the first hand of a game exercises none of it.
+- **Akagi 安装器（推荐）**：Bots 页 → 从本地 zip 安装 → 选 `kobalab.zip`（构建方法见第三节）。什么都不用改名——压缩包的顶层目录就是 `kobalab`，安装器按 zip 文件名词干命名 bot，目录自然正确。
+- **手动解压**：把包解开成 `<akagi>/mjai_bot/kobalab/bot.py`。常见错误是解出嵌套的 `kobalab/kobalab/`。
 
-## Limitations
+然后依次：
 
-- **4-player only.** `manifest.toml` declares `supported_modes = ["4p"]` so
-  Akagi's UI disables the sanma toggle, and `bot.py`/the bridge refuse a 3-player
-  game outright. The reason is concrete: `SuanPai` is hard-coded to a 70-tile
-  live wall (the 3-player wall is 55), and the library has no `kita` rule at all,
-  so every estimate would be wrong.
-- **No `qijia` on the wire.** Akagi's `start_game` does not carry the game's base
-  dealer, so the bridge assumes the bot's own seat is the base dealer. That view
-  is internally consistent, which is all the AI's own comparisons need.
-- **Wall count is reconstructed, not observed.** `majiang-ai` has no whole-game
-  replay mode, so `probe/harness.js` derives its mjai input from the engine's own
-  relative-seat messages. The bridge itself is what Akagi drives, and that path is
-  exercised by `test/` plus the JSONL runs above. The reconstruction is exact for
-  every draw the wire reports; a draw resolved inside the engine without a message
-  (`reply_gang`/`reply_dapai`) would leave it one high, and the harness sweep is
-  what would catch it — the sweep run for this build reports none over
-  **116 games / 1298 hands / 122 127 messages**, across east and south rounds.
-- **The legality gate is type-level.** `from_majiang.js` refuses an action whose
-  *type* is not in the legal set the bridge derives from its own model. It cannot
-  see the candidate *list* Akagi's riichi engine holds, so a legal-looking but
-  engine-illegal instance of an allowed type (a chi of the wrong tile, say) is
-  not caught here. Widening it would mean consuming Akagi's set for real.
-- **Rule presets are two axes wide.** `tenhou` and `majsoul` differ only in
-  whether kuikae is allowed; both use the library's Tenhou-shaped defaults
-  (red fives, kuitan, head-bump). Anything else needs a rule edit in
-  `bridge/main.js`.
+1. **确认 Node.js ≥ 18 可用。** Akagi 不内置 Node。垫片的查找顺序：`KOBALAB_NODE` 环境变量 → `PATH` 上的 `node`/`node.exe`/`nodejs` → 常见安装位置（`C:\Program Files\nodejs\node.exe`、nvm-windows、WindowsApps、用户级安装、Chocolatey、Scoop）。每个候选都会先跑 `--version` 验证（专门防 Microsoft Store 的 App Execution Alias：文件存在但不是正常可执行文件）。找不到时 bot 会主动弹通知，而不是让 Akagi 每回合超时。
 
-## Licensing
+   若 Node 已装好但 bot 说找不到：多半是 Akagi 启动时没继承你的用户 PATH（装 Node 时 Akagi 正在运行是常见原因）。重启 Akagi，或者干脆指定路径：
 
-`@kobalab/majiang-ai` and `@kobalab/majiang-core` are MIT. This bridge is MIT.
-The bot runs as a separate OS process talking JSON over pipes — the same
-boundary Akagi already relies on for AGPL bots — so nothing here is linked into
-Akagi.
+   ```powershell
+   setx KOBALAB_NODE "C:\Program Files\nodejs\node.exe"
+   ```
+
+   （`setx` 只影响之后启动的进程，改完要重启 Akagi。）不想全局装 Node 的话，解压一份 Node 便携版到任意目录、把 `KOBALAB_NODE` 指到它的 `node.exe` 即可。
+
+2. **bot 目录必须叫 `kobalab`**（最终形如 `<akagi>/mjai_bot/kobalab/bot.py`）。这不是美观问题：Akagi 以"含 `bot.py` 的目录名"标识 bot——Bots 列表、`settings.toml`、UI 行全按它做键。名字不一致的表现就是"设置保存不上"：面板写进一个名字、读的是另一个。同一个 zip 若被存成 `kobalab-bot.zip`，就会装进 `mjai_bot/kobalab-bot/` 并触发这个问题。Akagi 解析 `bot.dir`（默认 `mjai_bot`）时先相对其可执行文件目录、再相对工作目录；Bots 页每个 bot 下方会打印解析出的路径，那是最快的确认方式。
+
+   ```
+   akagi-<版本>-windows-x64/
+   └── mjai_bot/
+       └── kobalab/          ← 目录名必须是 kobalab
+           ├── bot.py
+           ├── manifest.toml
+           └── …
+   ```
+
+3. **在该行点 "Install environment"。** Akagi 强制每个子进程 bot 都有 `pyproject.toml`（用于 `uv sync`），本仓库内置了一个零依赖的最小版本，这一步只创建 venv、什么也不装，很快。之后 `bot.py` 在该 venv 的解释器下运行。
+
+4. **打开该行的 4p 开关。** 第 3 步没跑过之前开关是禁用的（Akagi 拒绝激活环境未安装的 bot，避免第一局卡在同步上）。
+
+> **重装/升级**：Akagi 拒绝覆盖已存在的 `mjai_bot/kobalab/`，装新版前先删掉旧目录。
+
+---
+
+## 三、打包成可导入 Akagi 的 zip
+
+### 3.1 本地打包
+
+```sh
+cd kobalab-bot
+python pack_kobalab.py        # 需要 Python ≥ 3.10，无第三方依赖
+```
+
+输出到仓库根：`kobalab.zip`。脚本自动处理三件**承重**的事：
+
+1. **文件名必须是 `kobalab.zip`**——Akagi 按 zip 词干命名 bot，存成别的名字会触发 2.6 里的"设置存不上"。
+2. **恰好一个顶层目录 `kobalab/`**——Akagi 解包时剥掉一层，`kobalab/…` 落成 `mjai_bot/kobalab/…`；带绝对路径或 `..` 段的条目会被 Akagi 拒收，脚本在构建时就校验。
+3. **该带的带上、该排的排掉**：
+   - **必须内置 `node_modules`**——Akagi 安装时没有 npm 步骤；
+   - **不得包含** `.akagi/`（目标机上 Akagi 建的 venv 与同步戳）、`settings.toml`（用户自己的设置）；
+   - 仓库自身的水管也不进包：`pack_kobalab.py`、`.github/`、`.gitignore`、`.gitattributes` 由脚本显式排除，装进 Akagi 的永远是纯粹的 bot。
+
+构建是**字节可复现**的：条目排序、时间戳固定为 1980-01-01，同一棵树两次构建 sha256 一致，可以和 CI 产物互相校验。
+
+打包后建议按安装布局复验一遍（而不是只信开发目录）：
+
+```sh
+# 把 zip 解到 <akagi>/mjai_bot/kobalab/ 后，在该目录里：
+npm test                          # 四套单测
+node probe/harness.js --games 2   # 整局对账
+node doctor.js                    # 设置链路（此时仅缺 settings.toml 属正常）
+echo '[{"type":"start_game","names":["a","b","c","d"],"id":0,"num_players":4}]' | python bot.py 2
+```
+
+### 3.2 通过 GitHub Actions 自动发布（推荐）
+
+仓库自带 `.github/workflows/release.yml`：**推送 `kobalab-v*` tag 即自动发布**——CI 会 `npm ci` 装依赖 → `npm test` 当门槛（单测不过不出包）→ `python pack_kobalab.py` 构建 → 把 `kobalab.zip` 挂到该 tag 的 GitHub Release（不存在则自动创建，附自动 release notes）。
+
+```sh
+git tag kobalab-v0.2.3
+git push origin kobalab-v0.2.3     # 这一条命令就是完整的发版流程
+```
+
+也可以在 Actions 页用 `workflow_dispatch` 手动重跑（比如改完 Release 说明后重挂附件）。
+
+> ⚠️ **必须用 `kobalab-v*` 前缀，不要用裸 `v*`，更不要 `git push --tags`。** 本仓库因 `git fetch upstream --tags` 带有 majiang-ai 上游的四十多个 `v*` tag，裸前缀会让它们也触发发布、还会和 bot 自己的版本号撞名。上游 tag 只留在本地做观察用。
+
+### 3.3 导入 Akagi
+
+构建/下载得到 `kobalab.zip` 后，按 2.6 的步骤安装：**保持文件名 `kobalab.zip` 不变** → 若装过旧版先删 `<akagi>/mjai_bot/kobalab/` → Bots 页安装（或手动解压）→ 点 **Install environment** → 打开 **4p** 开关。装好后对局中就能看到 HUD 候选卡片；对 bot 行为有疑问时，看 stderr 里 `[kobalab-shim]` / `[kobalab]` 开头的日志行，其中带有座位、牌墙计数与每次决策的类型。
+
+---
+
+## 附录：仓库目录结构
+
+```
+kobalab-bot/                （git 仓库根）
+├── bot.py              Akagi 入口：拉起 Node 桥接器并接通 stdio
+├── pyproject.toml      Akagi 硬性要求；零依赖，只为建 venv
+├── manifest.toml       展示元数据、supported_modes=["4p"]、设置项声明
+├── package.json        @kobalab/majiang-ai + majiang-core（由 lockfile 锁定）
+├── package-lock.json   依赖锁定（CI 与本地安装以此为准）
+├── node_modules/       两个上游库（打包时内置；git 不跟踪，npm install 可重建）
+├── doctor.js           设置链路诊断：在 bot 目录里 node doctor.js
+├── bridge/
+│   ├── main.js         JSONL 主循环；每批必答一个动作
+│   ├── tiles.js        mjai ⇄ majiang 牌与手牌记法互译
+│   ├── to_majiang.js   mjai 事件流 → 驱动 majiang-core Player 模型
+│   ├── from_majiang.js Player 决策 → mjai 动作（含合法性闸门）
+│   └── show.js         候选列表 → Akagi 的 meta.show HUD 卡片
+├── test/               四套逐层单测（node test/test_tiles.js …）
+├── probe/harness.js    整局对账：与 majiang-core 引擎棋盘逐消息比对
+├── pack_kobalab.py     构建可安装的 kobalab.zip（CI 同用此脚本）
+└── .github/workflows/release.yml   推送 kobalab-v* tag → 构建 zip → 挂到 Release
+```
+
+版本历史见 [CHANGELOG.md](CHANGELOG.md)。
